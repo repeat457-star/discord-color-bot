@@ -51,6 +51,10 @@ const COMANDOS = [
     .setName("memoria-status")
     .setDescription("Mostra quantas mensagens estão na memória deste canal.")
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("resumo")
+    .setDescription("Gera um resumo do que foi discutido no servidor recentemente.")
+    .toJSON(),
 ];
 
 async function registrarComandos(clientId, guildId) {
@@ -245,6 +249,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: `🧠 **Memória deste canal:** ${qtd} mensagens\n📖 **Contexto do servidor:** ${temContexto ? "✅ carregado" : "❌ não carregado (use /ler-servidor)"}`,
         ephemeral: true,
       });
+      return;
+    }
+
+    if (commandName === "resumo") {
+      await interaction.deferReply();
+
+      let contexto = obterContextoServidor(guild.id);
+      if (!contexto) {
+        await interaction.editReply("⏳ Lendo o servidor pela primeira vez, aguarde...");
+        const { texto, total } = await lerMensagensServidor(guild, client.user);
+        definirContextoServidor(guild.id, texto);
+        contexto = texto;
+        console.log(`📖 Contexto carregado para resumo: ${total} mensagens`);
+      }
+
+      const prompt =
+        "Com base nas mensagens do servidor abaixo, faça um resumo detalhado dos principais assuntos discutidos recentemente. " +
+        "Organize por tópicos, destaque o que foi mais debatido e mencione os usuários envolvidos quando relevante. " +
+        "Seja direto e informativo.";
+
+      const resumo = await perguntarGroq(prompt, [], contexto);
+      const partes = resumo.match(/[\s\S]{1,2000}/g) || [resumo];
+      for (const parte of partes) {
+        if (parte === partes[0]) {
+          await interaction.editReply(`📋 **Resumo do servidor:**\n\n${parte}`);
+        } else {
+          await interaction.followUp(parte);
+        }
+      }
       return;
     }
 
