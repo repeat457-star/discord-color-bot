@@ -161,7 +161,25 @@ client.once(Events.ClientReady, async (c) => {
       console.error(`❌ Erro no servidor ${guild.name}:`, err.message);
     }
   }
+
+  const DUAS_HORAS = 2 * 60 * 60 * 1000;
+  setInterval(async () => {
+    for (const [, guild] of c.guilds.cache) {
+      await atualizarContextoServidor(guild);
+    }
+  }, DUAS_HORAS);
+  console.log("⏱️ Atualização automática do contexto configurada (a cada 2h)");
 });
+
+async function atualizarContextoServidor(guild) {
+  try {
+    const { texto, total } = await lerMensagensServidor(guild, client.user);
+    definirContextoServidor(guild.id, texto);
+    console.log(`🔄 Contexto atualizado automaticamente: ${total} mensagens`);
+  } catch (err) {
+    console.error("❌ Erro ao atualizar contexto:", err.message);
+  }
+}
 
 client.on(Events.Error, (err) => {
   console.error("❌ Erro no client Discord:", err.message);
