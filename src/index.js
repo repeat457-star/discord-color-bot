@@ -12,6 +12,9 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import { CORES } from "./colors.js";
+import { perguntarGrok } from "./grok.js";
+
+const GROK_CHANNEL_ID = "1510393743084355614";
 
 const CHANNEL_ID = "1510384876355063848";
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -222,6 +225,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.editReply({
       content: `✅ Você recebeu o cargo **${corEscolhida.replace("Cor: ", "")}**!`,
     });
+  }
+});
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return;
+  if (message.channelId !== GROK_CHANNEL_ID) return;
+  if (!message.mentions.has(client.user)) return;
+
+  const pergunta = message.content
+    .replace(/<@!?[0-9]+>/g, "")
+    .trim();
+
+  if (!pergunta) {
+    await message.reply("Pode falar! Me mencione com uma pergunta. 😄");
+    return;
+  }
+
+  try {
+    await message.channel.sendTyping();
+    const resposta = await perguntarGrok(pergunta);
+    const partes = resposta.match(/[\s\S]{1,2000}/g) || [resposta];
+    for (const parte of partes) {
+      await message.reply(parte);
+    }
+  } catch (err) {
+    console.error("❌ Erro ao chamar Grok:", err.message);
+    await message.reply("❌ Ocorreu um erro ao consultar o Grok. Tente novamente.");
   }
 });
 
