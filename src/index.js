@@ -163,6 +163,15 @@ client.once(Events.ClientReady, async (c) => {
   }
 });
 
+client.on(Events.Error, (err) => {
+  console.error("❌ Erro no client Discord:", err.message);
+});
+
+process.on("unhandledRejection", (err) => {
+  if (err?.code === 10062) return;
+  console.error("❌ Rejeição não tratada:", err?.message ?? err);
+});
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
     const { commandName, guild, member } = interaction;
