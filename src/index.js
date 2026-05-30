@@ -12,11 +12,12 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import { CORES } from "./colors.js";
-import { perguntarGrok } from "./grok.js";
-
-const GROK_CHANNEL_ID = "1510393743084355614";
+import { perguntarGroq } from "./grok.js";
+import { adicionarMensagem, obterHistorico, limparHistorico, obterTamanhoHistorico } from "./memoria.js";
+import { definirContextoServidor, obterContextoServidor, lerMensagensServidor } from "./contexto-servidor.js";
 
 const CHANNEL_ID = "1510384876355063848";
+const GROK_CHANNEL_ID = "1510393743084355614";
 const TOKEN = process.env.DISCORD_TOKEN;
 
 if (!TOKEN) {
@@ -37,6 +38,18 @@ const COMANDOS = [
   new SlashCommandBuilder()
     .setName("remover-cores")
     .setDescription("Remove sua cor atual do servidor.")
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("ler-servidor")
+    .setDescription("Lê mensagens recentes do servidor para dar contexto à IA. (Apenas admins)")
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("limpar-memoria")
+    .setDescription("Limpa o histórico de conversa da IA neste canal.")
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("memoria-status")
+    .setDescription("Mostra quantas mensagens estão na memória deste canal.")
     .toJSON(),
 ];
 
@@ -100,7 +113,6 @@ async function enviarMenuCores(channel) {
     );
 
   const row = new ActionRowBuilder().addComponents(select);
-
   await channel.send({ embeds: [embed], components: [row] });
   console.log("📬 Menu de cores enviado no canal.");
 }
@@ -142,44 +154,73 @@ client.once(Events.ClientReady, async (c) => {
 
       if (faltando.length > 0) {
         console.warn(`⚠️ Permissões faltando no canal #${channel.name}: ${faltando.join(", ")}`);
-        console.warn(`👉 Vá em Editar Canal → Permissões → adicione o cargo do bot com essas permissões.`);
       }
 
       await enviarMenuCores(channel);
     } catch (err) {
-      console.error(`❌ Erro no servidor ${guild.name}:`, err.message, err.stack);
+      console.error(`❌ Erro no servidor ${guild.name}:`, err.message);
     }
   }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === "remover-cores") {
+    const { commandName, guild, member } = interaction;
+
+    if (commandName === "remover-cores") {
       await interaction.deferReply({ ephemeral: true });
-
-      const member = interaction.member;
-      const guild = interaction.guild;
-
       await guild.roles.fetch();
-
-      const nomesDeCorRegex = /^Cor: /;
       const cargosDeCorIds = guild.roles.cache
-        .filter((r) => nomesDeCorRegex.test(r.name))
+        .filter((r) => /^Cor: /.test(r.name))
         .map((r) => r.id);
-
-      const cargosRemovidos = cargosDeCorIds.filter((id) => member.roles.cache.has(id));
-
-      if (cargosRemovidos.length === 0) {
+      const removidos = cargosDeCorIds.filter((id) => member.roles.cache.has(id));
+      if (removidos.length === 0) {
         await interaction.editReply({ content: "Você não possui nenhum cargo de cor." });
         return;
       }
-
-      for (const id of cargosRemovidos) {
-        await member.roles.remove(id).catch(() => {});
-      }
-
+      for (const id of removidos) await member.roles.remove(id).catch(() => {});
       await interaction.editReply({ content: "🗑️ Sua cor foi removida com sucesso!" });
+      return;
     }
+
+    if (commandName === "ler-servidor") {
+      const ehAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
+      if (!ehAdmin) {
+        await interaction.reply({ content: "❌ Apenas administradores podem usar este comando.", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+      console.log(`📖 Lendo mensagens do servidor ${guild.name}...`);
+      try {
+        const { texto, total } = await lerMensagensServidor(guild, client.user);
+        definirContextoServidor(guild.id, texto);
+        console.log(`✅ Contexto do servidor atualizado: ${total} mensagens`);
+        await interaction.editReply({
+          content: `✅ Pronto! Li **${total} mensagens** de ${guild.channels.cache.filter(c => c.isTextBased()).size} canais.\nAgora a IA tem contexto completo do servidor.`,
+        });
+      } catch (err) {
+        console.error("❌ Erro ao ler servidor:", err.message);
+        await interaction.editReply({ content: "❌ Erro ao ler as mensagens do servidor." });
+      }
+      return;
+    }
+
+    if (commandName === "limpar-memoria") {
+      limparHistorico(interaction.channelId);
+      await interaction.reply({ content: "🧹 Memória da conversa limpa neste canal!", ephemeral: true });
+      return;
+    }
+
+    if (commandName === "memoria-status") {
+      const qtd = obterTamanhoHistorico(interaction.channelId);
+      const temContexto = obterContextoServidor(guild.id) !== null;
+      await interaction.reply({
+        content: `🧠 **Memória deste canal:** ${qtd} mensagens\n📖 **Contexto do servidor:** ${temContexto ? "✅ carregado" : "❌ não carregado (use /ler-servidor)"}`,
+        ephemeral: true,
+      });
+      return;
+    }
+
     return;
   }
 
@@ -187,44 +228,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.customId !== "selecionar_cor") return;
 
   await interaction.deferReply({ ephemeral: true });
-
   const corEscolhida = interaction.values[0];
   const member = interaction.member;
   const guild = interaction.guild;
-
   await guild.roles.fetch();
 
-  const nomesDeCorRegex = /^Cor: /;
   const cargosDeCorIds = guild.roles.cache
-    .filter((r) => nomesDeCorRegex.test(r.name))
+    .filter((r) => /^Cor: /.test(r.name))
     .map((r) => r.id);
-
   const cargoDesejado = guild.roles.cache.find((r) => r.name === corEscolhida);
 
   if (!cargoDesejado) {
-    await interaction.editReply({
-      content: "❌ Cargo não encontrado. Tente novamente em alguns instantes.",
-    });
+    await interaction.editReply({ content: "❌ Cargo não encontrado. Tente novamente em alguns instantes." });
     return;
   }
 
   const temCargo = member.roles.cache.has(cargoDesejado.id);
-
   for (const id of cargosDeCorIds) {
-    if (member.roles.cache.has(id)) {
-      await member.roles.remove(id).catch(() => {});
-    }
+    if (member.roles.cache.has(id)) await member.roles.remove(id).catch(() => {});
   }
 
   if (temCargo) {
-    await interaction.editReply({
-      content: `🗑️ Seu cargo de cor **${corEscolhida.replace("Cor: ", "")}** foi removido.`,
-    });
+    await interaction.editReply({ content: `🗑️ Seu cargo de cor **${corEscolhida.replace("Cor: ", "")}** foi removido.` });
   } else {
     await member.roles.add(cargoDesejado);
-    await interaction.editReply({
-      content: `✅ Você recebeu o cargo **${corEscolhida.replace("Cor: ", "")}**!`,
-    });
+    await interaction.editReply({ content: `✅ Você recebeu o cargo **${corEscolhida.replace("Cor: ", "")}**!` });
   }
 });
 
@@ -233,9 +261,7 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.channelId !== GROK_CHANNEL_ID) return;
   if (!message.mentions.has(client.user)) return;
 
-  const pergunta = message.content
-    .replace(/<@!?[0-9]+>/g, "")
-    .trim();
+  const pergunta = message.content.replace(/<@!?[0-9]+>/g, "").trim();
 
   if (!pergunta) {
     await message.reply("Pode falar! Me mencione com uma pergunta. 😄");
@@ -244,14 +270,22 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
     await message.channel.sendTyping();
-    const resposta = await perguntarGrok(pergunta);
+
+    const historico = obterHistorico(GROK_CHANNEL_ID);
+    const contextoServidor = obterContextoServidor(message.guild.id);
+
+    const resposta = await perguntarGroq(pergunta, historico, contextoServidor);
+
+    adicionarMensagem(GROK_CHANNEL_ID, "user", pergunta, message.author.username);
+    adicionarMensagem(GROK_CHANNEL_ID, "assistant", resposta);
+
     const partes = resposta.match(/[\s\S]{1,2000}/g) || [resposta];
     for (const parte of partes) {
       await message.reply(parte);
     }
   } catch (err) {
-    console.error("❌ Erro ao chamar Grok:", err.message);
-    await message.reply("❌ Ocorreu um erro ao consultar o Grok. Tente novamente.");
+    console.error("❌ Erro ao chamar Groq:", err.message);
+    await message.reply("❌ Ocorreu um erro ao consultar a IA. Tente novamente.");
   }
 });
 
