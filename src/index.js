@@ -55,6 +55,13 @@ const COMANDOS = [
     .setName("resumo")
     .setDescription("Gera um resumo do que foi discutido no servidor recentemente.")
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("pergunta-server")
+    .setDescription("Faz uma pergunta sobre o que foi discutido no servidor.")
+    .addStringOption((opt) =>
+      opt.setName("pergunta").setDescription("O que você quer saber?").setRequired(true)
+    )
+    .toJSON(),
 ];
 
 async function registrarComandos(clientId, guildId) {
@@ -249,6 +256,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: `🧠 **Memória deste canal:** ${qtd} mensagens\n📖 **Contexto do servidor:** ${temContexto ? "✅ carregado" : "❌ não carregado (use /ler-servidor)"}`,
         ephemeral: true,
       });
+      return;
+    }
+
+    if (commandName === "pergunta-server") {
+      await interaction.deferReply();
+
+      let contexto = obterContextoServidor(guild.id);
+      if (!contexto) {
+        await interaction.editReply("⏳ Lendo o servidor pela primeira vez, aguarde...");
+        const { texto, total } = await lerMensagensServidor(guild, client.user);
+        definirContextoServidor(guild.id, texto);
+        contexto = texto;
+        console.log(`📖 Contexto carregado para pergunta: ${total} mensagens`);
+      }
+
+      const pergunta = interaction.options.getString("pergunta");
+      const prompt =
+        `Com base nas mensagens do servidor, responda à seguinte pergunta de forma detalhada e precisa: "${pergunta}". ` +
+        "Se a informação não estiver nas mensagens, diga claramente que não foi encontrada.";
+
+      const resposta = await perguntarGroq(prompt, [], contexto);
+      const partes = resposta.match(/[\s\S]{1,2000}/g) || [resposta];
+      for (const parte of partes) {
+        if (parte === partes[0]) {
+          await interaction.editReply(`🔍 **${pergunta}**\n\n${parte}`);
+        } else {
+          await interaction.followUp(parte);
+        }
+      }
       return;
     }
 
